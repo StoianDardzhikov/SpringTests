@@ -1,29 +1,31 @@
 import CircularDependency.Circular;
+import org.example.PropTest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.NoSuchBeanDefinitionException;
-import org.springframework.beans.factory.NoUniqueBeanDefinitionException;
-import org.springframework.beans.factory.UnsatisfiedDependencyException;
-import org.springframework.boot.SpringApplication;
-import org.springframework.boot.SpringBootConfiguration;
+import org.springframework.beans.factory.*;
 import TestFiles.*;
+import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.context.ConfigurableApplicationContext;
-import org.springframework.context.annotation.AnnotationConfigApplicationContext;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.ComponentScan;
+import org.springframework.context.annotation.*;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 @ComponentScan("TestFiles")
-@SpringBootConfiguration
+@Configuration
+@PropertySource("prop.properties")
+@ImportResource("context.xml")
 public class TestClass {
 
-    public static boolean loaded = false;
+    @Bean
+    public BeanPostProcessor beanPostProcessor() {
+        return new MyBeanPostProcessor();
+    }
 
     @Bean
     public A a1() { return new A(); }
     @Bean
+    @Scope("prototype")
     public B b1() { return new B(); }
     @Bean
     public D d1() { return new D(); }
@@ -31,19 +33,25 @@ public class TestClass {
     public F f1() { return new F(); }
     @Bean
     public I i1() { return new I(); }
+    @Bean(destroyMethod = "destroy")
+    public ShutdownHookAnnotation shutdownHookAnnotation() {
+        return new ShutdownHookAnnotation();
+    }
 
     @Bean(name = "dbURL")
     public String string1() {
         return "This is dbURL";
     }
 
+    @Bean
+    public String string2() {return  ""; }
+
     ConfigurableApplicationContext context;
 
     @BeforeEach
     public void setUp() {
-        context = SpringApplication.run(TestClass.class);
+        context = new AnnotationConfigApplicationContext(TestClass.class);
     }
-
 
     @Test
     @DisplayName("Autowire variable")
@@ -103,7 +111,7 @@ public class TestClass {
     @Test
     @DisplayName("AnnotationConfigApplicationContext circular dependency working")
     public void test8() {
-        AnnotationConfigApplicationContext configApplicationContext = new AnnotationConfigApplicationContext("CircularDependency");
+        AnnotationConfigApplicationContext configApplicationContext = new AnnotationConfigApplicationContext(CircularDependencyConfig.class);
         Circular circular = configApplicationContext.getBean(Circular.class);
         assertNotNull(circular);
         assertNotNull(circular.dependency);
@@ -111,40 +119,46 @@ public class TestClass {
     }
 
     @Test
-    @DisplayName("ConfigurableApplicationContext throws circular dependency exception")
+    @DisplayName("Injecting through properties file")
     public void test9() {
-        assertThrows(UnsatisfiedDependencyException.class, () -> {
-            ConfigurableApplicationContext cirDepContext = SpringApplication.run(CircularDependencyConfig.class);
-            Circular circular = cirDepContext.getBean(Circular.class);
-        });
+        PropTest propTest = context.getBean(PropTest.class);
+
+        assertEquals(propTest.thisIsMyProp, "propValue");
+    }
+
+    @Test
+    @DisplayName("Setter injection")
+    public void test10() {
+        N n = context.getBean(N.class);
+        assertNotNull(n.a);
     }
 
     @Test
     @DisplayName("Test lazy loading")
-    public void test10() {
+    public void test11() {
         K k = context.getBean(K.class);
         assertFalse(K.loadedL);
-        k.l.toString(); // Trigger toString method of L to force it to initialize
+        k.l.toString();
         assertTrue(K.loadedL);
     }
 
     @Test
     @DisplayName("Test not auto wired variable")
-    public void test11() {
+    public void test12() {
         A a = context.getBean(A.class);
         assertNull(a.c);
     }
 
     @Test
     @DisplayName("Initialize interface with only 1 implementation")
-    public void test12() {
+    public void test13() {
         IA ia = context.getBean(IA.class);
         assertEquals(ia.getClass(), A.class);
     }
 
     @Test
     @DisplayName("Initialize interface with more than 1 implementations")
-    public void test13() {
+    public void test14() {
         assertThrows(NoUniqueBeanDefinitionException.class, () -> {
             Inter inter = context.getBean(Inter.class);
         });
@@ -152,8 +166,78 @@ public class TestClass {
 
     @Test
     @DisplayName("Initializing bean test")
-    public void test14() {
+    public void test15() {
         M m = context.getBean(M.class);
         assertEquals(m.dbURL, string1() + " - url");
+    }
+
+    @Test
+    @DisplayName("Constructor and set based injection together")
+    public void test16() {
+        O o = context.getBean(O.class);
+        assertNotNull(o.a);
+        assertNotNull(o.b);
+    }
+
+    @Test
+    @DisplayName("Prototype scope creates a different instance every time")
+    public void test17() {
+        B b1 = context.getBean(B.class);
+        B b2 = context.getBean(B.class);
+
+        assertNotEquals(b1, b2);
+    }
+
+    @Test
+    @DisplayName("Injecting value into static field")
+    public void test18() {
+        context.getBean(PropTest.class);
+
+        assertEquals(PropTest.thisIsMyStaticProp, "propValue");
+    }
+
+    @Test
+    @DisplayName("BeanPostProcessor invoking after initialization")
+    public void test19() {
+        context.getBean(PropTest.class);
+        assertEquals(PostProcessorTest.message, "after");
+    }
+
+    @Test
+    @DisplayName("BeanPostProcessor invoking before initialization")
+    public void test20() {
+        MyBeanPostProcessor.invokedBeforeInitialization = false;
+        new AnnotationConfigApplicationContext(TestClass.class);
+        assertTrue(MyBeanPostProcessor.invokedBeforeInitialization);
+    }
+
+    @Test
+    @DisplayName("Shutdown hook pre destroy invoking on destroy")
+    public void test21() {
+        ShutdownHookPreDestroy.destroyed = false;
+        context.close();
+        assertTrue(ShutdownHookPreDestroy.destroyed);
+    }
+
+    @Test
+    @DisplayName("Shutdown hook disposable invoking on destroy")
+    public void test22() {
+        ShutdownHookDisposable.destroyed = false;
+        context.close();
+        assertTrue(ShutdownHookDisposable.destroyed);
+    }
+
+    @Test
+    @DisplayName("Shutdown hook annotation invoking on destroy")
+    public void test23() {
+        ShutdownHookAnnotation.destroyed = false;
+        context.close();
+        assertTrue(ShutdownHookAnnotation.destroyed);
+    }
+
+    @Test
+    @DisplayName("Post construct annotation invoking")
+    public void test24() {
+        assertTrue(PostConstructAnnotation.postConstructInvoked);
     }
 }

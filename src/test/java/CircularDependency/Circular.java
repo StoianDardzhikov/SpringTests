@@ -5,5 +5,5 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class Circular {
-    @Autowired public Dependency dependency;
+    public @Autowired Dependency dependency;
 }
